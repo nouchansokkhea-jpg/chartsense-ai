@@ -1,0 +1,61 @@
+services:
+  - type: web
+    name: chartsense-ai
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: starter
+    region: oregon
+    healthCheckPath: /up
+    envVars:
+      - key: APP_NAME
+        value: "ChartSense AI"
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_KEY
+        generateValue: true
+      - key: APP_URL
+        fromService:
+          type: web
+          name: chartsense-ai
+          property: host
+      - key: DB_CONNECTION
+        value: pgsql
+      - key: DB_HOST
+        fromDatabase:
+          name: chartsense-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: chartsense-db
+          property: port
+      - key: DB_DATABASE
+        fromDatabase:
+          name: chartsense-db
+          property: database
+      - key: DB_USERNAME
+        fromDatabase:
+          name: chartsense-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: chartsense-db
+          property: password
+      - key: SESSION_DRIVER
+        value: database
+      - key: CACHE_STORE
+        value: database
+      - key: QUEUE_CONNECTION
+        value: database
+      - key: EXNESS_REFERRAL_URL
+        value: "https://one.exnessonelink.com/a/l4l2nsdkfb?source=app"
+      - key: REFERRAL_VERIFICATION_MODE
+        value: manual_review
+
+databases:
+  - name: chartsense-db
+    databaseName: chartsense_db
+    user: postgres
+    region: oregon
+    plan: starter
