@@ -268,13 +268,39 @@ sudo supervisorctl start chartsense-worker:*
 
 ---
 
-## 🔒 Security Best Practices
+## 🔒 Institutional Cybersecurity Hardening
 
-1. **Storage Isolation:** Evidence files and chart uploads are stored in the non-public `storage/app/` disk and served only through authenticated controller responses after role checks.
-2. **MIME Verification:** All file uploads are validated for authentic binary magic bytes (`mimes:png,jpg,jpeg,webp,pdf,csv,txt`).
-3. **Session Hardening:** CSRF protection enabled on all mutable requests; session tokens regenerated on authentication state transitions.
-4. **Rate Limiting:** IP and account throttling applied to login endpoints to defeat brute-force dictionary attacks.
-5. **No Billing Risk:** By architectural mandate, no financial cards or billing credentials exist within the application.
+ChartSense AI adheres to OWASP Top 10 institutional security standards:
+1. **HTTP Security Headers (`SecurityHeadersMiddleware`):**
+   - `Content-Security-Policy`: Restricts scripts/styles/frames strictly to self, Google Identity, Firebase, and trusted CDNs.
+   - `Strict-Transport-Security` (HSTS): Enforces 1-year preload TLS encryption.
+   - `X-Frame-Options: SAMEORIGIN`: Prevents UI redressing and clickjacking.
+   - `X-Content-Type-Options: nosniff`: Defeats MIME sniffing attacks.
+   - `X-XSS-Protection: 1; mode=block`: Active browser-level XSS filter.
+   - `Permissions-Policy`: Hard disables unauthorized hardware sensors (camera, microphone, geolocation, payment).
+2. **Reverse Proxy & TLS Termination:** Fully trusts reverse proxy headers (`trustProxies('*')`) for cloud load balancers (AWS ALB, Cloudflare, Render, Railway).
+3. **Storage & Path Traversal Isolation:** Chart screenshots and referral proofs reside exclusively in private storage (`storage/app/`), guarded by `realpath()` containment checks and strict IDOR authorization logic.
+4. **Rate Limiting & DDoS Mitigation:** Sensitive routes are rate-limited per IP (Login: 15/min, Register: 10/min, Firebase session: 20/min, Scanner: 15/min).
+5. **Session & Cookie Hardening:** `SameSite=Lax`, `HttpOnly=true`, `secure=true` on HTTPS, with JSON session serialization preventing PHP object injection.
+6. **No Billing Risk:** By architectural mandate, no credit cards or billing credentials exist within the application.
+
+---
+
+## 🐳 Production Cloud Deployment (Docker & PostgreSQL)
+
+ChartSense AI comes pre-packaged with production Docker and 1-click cloud manifests:
+
+### 1. Render Deployment (`render.yaml`)
+1. Fork or push this repository to GitHub.
+2. In [Render Dashboard](https://dashboard.render.com), click **New +** &rarr; **Blueprint**.
+3. Select your repository. Render will automatically provision:
+   - Managed **PostgreSQL 16** database (`chartsense-db`).
+   - Containerized Web Service running PHP 8.3 FPM + Nginx.
+
+### 2. Railway Deployment (`railway.json`)
+1. In [Railway](https://railway.app), click **New Project** &rarr; **Deploy from GitHub repo**.
+2. Add a **PostgreSQL** database service to the project.
+3. Railway automatically builds the multi-stage `Dockerfile` and runs automatic database migrations.
 
 ---
 
