@@ -27,7 +27,10 @@ RUN apk add --no-cache \
     curl \
     python3 \
     py3-pip \
-    bash
+    py3-numpy \
+    py3-pillow \
+    bash \
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
 # Configure and install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \

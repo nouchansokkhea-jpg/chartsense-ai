@@ -2,7 +2,11 @@ import sys
 import os
 import json
 import re
-import numpy as np
+import statistics
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 def detect_symbol(texts_with_boxes, requested_symbol="XAUUSD"):
     # Sort boxes: prioritize top header area (cy < 250, cx < 600)
@@ -329,7 +333,10 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
     # Outlier filter: compute median and discard numbers that deviate by more than 20%
     if extracted_prices:
         all_vals = [p['price'] for p in extracted_prices]
-        med_val = float(np.median(all_vals))
+        if np is not None:
+            med_val = float(np.median(all_vals))
+        else:
+            med_val = float(statistics.median(all_vals))
         extracted_prices = [p for p in extracted_prices if 0.80 * med_val <= p['price'] <= 1.20 * med_val]
 
     # 4. Identify Current Active Market Price

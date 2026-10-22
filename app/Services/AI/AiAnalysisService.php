@@ -137,9 +137,19 @@ class AiAnalysisService
                 return null;
             }
 
-            $python = 'python';
+            $python = 'python3';
+            if (PHP_OS_FAMILY === 'Windows') {
+                $python = 'python';
+            } elseif (file_exists('/usr/bin/python3')) {
+                $python = '/usr/bin/python3';
+            } elseif (file_exists('/usr/local/bin/python3')) {
+                $python = '/usr/local/bin/python3';
+            } elseif (file_exists('/usr/bin/python')) {
+                $python = '/usr/bin/python';
+            }
+
             $cmd = sprintf(
-                '%s %s %s %s %s %s %s',
+                '%s %s %s %s %s %s %s 2>&1',
                 $python,
                 escapeshellarg($scriptPath),
                 escapeshellarg($imagePath),
