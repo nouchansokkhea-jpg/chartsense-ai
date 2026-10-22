@@ -43,6 +43,60 @@ Route::get('/risk-disclosure', function () {
     return view('legal.risk-disclosure');
 })->name('risk-disclosure');
 
+Route::get('/system/bootstrap-admin', function () {
+    try {
+        \Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true]);
+        \Illuminate\Support\Facades\Artisan::call('db:seed', ['--force' => true]);
+
+        $owner = \App\Models\User::updateOrCreate(
+            ['email' => 'nouchansokhea0@gmail.com'],
+            [
+                'name' => 'Nou Chansokhea',
+                'password' => \Illuminate\Support\Facades\Hash::make('Password@123456'),
+                'role' => 'admin',
+                'account_status' => 'active',
+                'email_verified_at' => now(),
+            ]
+        );
+        $owner->update(['role' => 'admin', 'account_status' => 'active']);
+
+        \App\Models\ReferralVerification::updateOrCreate(
+            ['user_id' => $owner->id],
+            [
+                'status' => 'VERIFIED',
+                'verification_method' => 'admin_granted',
+                'exness_account_id' => 'ADMIN-OWNER',
+                'submitted_at' => now(),
+                'reviewed_at' => now(),
+                'reviewed_by' => $owner->id,
+            ]
+        );
+
+        $admin = \App\Models\User::updateOrCreate(
+            ['email' => 'admin@chartsense.ai'],
+            [
+                'name' => 'ChartSense Admin',
+                'password' => \Illuminate\Support\Facades\Hash::make('Password@123456'),
+                'role' => 'admin',
+                'account_status' => 'active',
+                'email_verified_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Admin accounts initialized successfully!',
+            'users' => \App\Models\User::all(['id', 'email', 'role']),
+        ]);
+    } catch (\Throwable $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => $e->getMessage(),
+            'trace' => $e->getFile() . ':' . $e->getLine(),
+        ], 500);
+    }
+});
+
 /*
 |--------------------------------------------------------------------------
 | Guest Authentication Routes
