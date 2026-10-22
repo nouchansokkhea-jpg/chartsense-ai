@@ -48,9 +48,10 @@ if [ -n "$DB_HOST" ]; then
     done
 fi
 
-# Run database migrations
-echo "Running database migrations..."
+# Run database migrations and seed administrative accounts
+echo "Running database migrations and seeders..."
 php artisan migrate --force || true
+php artisan db:seed --force || true
 
 # Optimize Laravel caching
 echo "Optimizing Laravel configuration and routes..."

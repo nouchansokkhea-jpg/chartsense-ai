@@ -127,6 +127,16 @@ class GoogleAuthController extends Controller
                 return redirect()->route('login')->with('error', 'Your account has been suspended. Please contact support.');
             }
 
+            // Promote owner to admin if applicable
+            $isOwner = in_array(strtolower($user->email), ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true);
+            if ($isOwner && $user->role !== 'admin') {
+                $user->update(['role' => 'admin']);
+                ReferralVerification::updateOrCreate(
+                    ['user_id' => $user->id],
+                    ['status' => 'VERIFIED', 'verification_method' => 'admin_granted']
+                );
+            }
+
             Auth::login($user, true);
             $request->session()->regenerate();
 
@@ -139,13 +149,14 @@ class GoogleAuthController extends Controller
         }
 
         // 2. Register brand new user via Google
+        $isOwner = in_array(strtolower($email), ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true);
         $user = User::create([
             'name' => !empty($name) ? $name : explode('@', $email)[0],
             'email' => $email,
             'google_id' => $googleId,
             'avatar' => $avatar,
             'password' => null, // OAuth-only user (no password required)
-            'role' => 'user',
+            'role' => $isOwner ? 'admin' : 'user',
             'account_status' => 'active',
             'email_verified_at' => now(),
         ]);
@@ -153,8 +164,8 @@ class GoogleAuthController extends Controller
         // Initialize referral verification record
         ReferralVerification::create([
             'user_id' => $user->id,
-            'status' => 'NOT_STARTED',
-            'verification_method' => 'manual_review',
+            'status' => $isOwner ? 'VERIFIED' : 'NOT_STARTED',
+            'verification_method' => $isOwner ? 'admin_granted' : 'manual_review',
         ]);
 
         Auth::login($user, true);
@@ -211,6 +222,15 @@ class GoogleAuthController extends Controller
                 ], 403);
             }
 
+            $isOwner = in_array($email, ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true);
+            if ($isOwner && $user->role !== 'admin') {
+                $user->update(['role' => 'admin']);
+                ReferralVerification::updateOrCreate(
+                    ['user_id' => $user->id],
+                    ['status' => 'VERIFIED', 'verification_method' => 'admin_granted']
+                );
+            }
+
             Auth::login($user, true);
             $request->session()->regenerate();
 
@@ -232,21 +252,22 @@ class GoogleAuthController extends Controller
         }
 
         // New registration via Firebase Google
+        $isOwner = in_array($email, ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true);
         $user = User::create([
             'name' => $name,
             'email' => $email,
             'google_id' => $uid,
             'avatar' => $avatar,
             'password' => null,
-            'role' => 'user',
+            'role' => $isOwner ? 'admin' : 'user',
             'account_status' => 'active',
             'email_verified_at' => now(),
         ]);
 
         ReferralVerification::create([
             'user_id' => $user->id,
-            'status' => 'NOT_STARTED',
-            'verification_method' => 'manual_review',
+            'status' => $isOwner ? 'VERIFIED' : 'NOT_STARTED',
+            'verification_method' => $isOwner ? 'admin_granted' : 'manual_review',
         ]);
 
         Auth::login($user, true);

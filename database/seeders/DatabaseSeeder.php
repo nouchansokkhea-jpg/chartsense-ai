@@ -15,8 +15,33 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // 1. Administrator Account
-        $admin = User::firstOrCreate(
+        // 1. Primary Owner & Administrator Account
+        $owner = User::updateOrCreate(
+            ['email' => 'nouchansokhea0@gmail.com'],
+            [
+                'name' => 'Nou Chansokhea',
+                'password' => Hash::make('Password@123456'),
+                'role' => 'admin',
+                'account_status' => 'active',
+                'email_verified_at' => now(),
+            ]
+        );
+
+        ReferralVerification::updateOrCreate(
+            ['user_id' => $owner->id],
+            [
+                'status' => 'VERIFIED',
+                'verification_method' => 'admin_granted',
+                'exness_account_id' => 'EX-OWNER-ADMIN',
+                'submitted_at' => now(),
+                'reviewed_at' => now(),
+                'reviewed_by' => $owner->id,
+                'admin_notes' => 'Primary platform owner with administrative privileges.',
+            ]
+        );
+
+        // 1b. Default System Admin Account
+        $admin = User::updateOrCreate(
             ['email' => 'admin@chartsense.ai'],
             [
                 'name' => 'ChartSense Admin',
@@ -24,6 +49,19 @@ class DatabaseSeeder extends Seeder
                 'role' => 'admin',
                 'account_status' => 'active',
                 'email_verified_at' => now(),
+            ]
+        );
+
+        ReferralVerification::updateOrCreate(
+            ['user_id' => $admin->id],
+            [
+                'status' => 'VERIFIED',
+                'verification_method' => 'admin_granted',
+                'exness_account_id' => 'EX-SYSTEM-ADMIN',
+                'submitted_at' => now(),
+                'reviewed_at' => now(),
+                'reviewed_by' => $admin->id,
+                'admin_notes' => 'System administrator account.',
             ]
         );
 
