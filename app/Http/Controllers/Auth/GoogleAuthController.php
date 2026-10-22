@@ -145,6 +145,10 @@ class GoogleAuthController extends Controller
                 'ip' => $request->ip(),
             ]);
 
+            if ($user->isAdmin()) {
+                return redirect()->intended(route('admin.dashboard'))->with('success', 'Welcome back, ' . $user->name . '!');
+            }
+
             return redirect()->intended(route('dashboard'))->with('success', 'Welcome back, ' . $user->name . '!');
         }
 
@@ -177,6 +181,10 @@ class GoogleAuthController extends Controller
             'google_id' => $googleId,
             'ip' => $request->ip(),
         ]);
+
+        if ($user->isAdmin()) {
+            return redirect()->route('admin.dashboard')->with('success', 'Welcome Administrator! Your account has been initialized.');
+        }
 
         return redirect()->route('dashboard')->with('success', 'Account created successfully with Google! Welcome to ChartSense AI.');
     }
@@ -242,7 +250,7 @@ class GoogleAuthController extends Controller
 
             return response()->json([
                 'success' => true,
-                'redirect_url' => route('dashboard'),
+                'redirect_url' => $user->isAdmin() ? route('admin.dashboard') : route('dashboard'),
                 'user' => [
                     'id' => $user->id,
                     'name' => $user->name,
@@ -282,7 +290,7 @@ class GoogleAuthController extends Controller
 
         return response()->json([
             'success' => true,
-            'redirect_url' => route('dashboard'),
+            'redirect_url' => $user->isAdmin() ? route('admin.dashboard') : route('dashboard'),
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
