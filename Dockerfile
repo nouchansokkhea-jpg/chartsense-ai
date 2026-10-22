@@ -11,7 +11,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production PHP + Nginx Environment
-FROM php:8.3-fpm-alpine
+FROM php:8.4-fpm-alpine
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -52,7 +52,7 @@ COPY . .
 COPY --from=frontend /app/public/build ./public/build
 
 # Install PHP dependencies for production
-RUN composer install --no-dev --optimize-autoloader --no-interaction
+RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
 
 # Copy Nginx config & Entrypoint script
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf
