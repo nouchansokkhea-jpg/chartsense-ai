@@ -3,7 +3,7 @@ services:
     name: chartsense-ai
     env: docker
     dockerfilePath: Dockerfile
-    plan: starter
+    plan: free
     region: oregon
     healthCheckPath: /up
     envVars:
@@ -15,13 +15,12 @@ services:
         value: "false"
       - key: APP_KEY
         generateValue: true
-      - key: APP_URL
-        fromService:
-          type: web
-          name: chartsense-ai
-          property: host
       - key: DB_CONNECTION
         value: pgsql
+      - key: DATABASE_URL
+        fromDatabase:
+          name: chartsense-db
+          property: connectionString
       - key: DB_HOST
         fromDatabase:
           name: chartsense-db
@@ -56,6 +55,5 @@ services:
 databases:
   - name: chartsense-db
     databaseName: chartsense_db
-    user: postgres
+    plan: free
     region: oregon
-    plan: starter
