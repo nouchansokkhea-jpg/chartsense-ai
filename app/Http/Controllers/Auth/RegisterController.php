@@ -38,20 +38,23 @@ class RegisterController extends Controller
             'terms.accepted' => 'You must accept the Terms of Service and Risk Disclosure to create an account.',
         ]);
 
+        $email = strtolower(trim($validated['email']));
+        $isOwner = in_array($email, ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true);
+
         $user = User::create([
             'name' => $validated['name'],
-            'email' => strtolower(trim($validated['email'])),
+            'email' => $email,
             'password' => Hash::make($validated['password']),
-            'role' => 'user',
+            'role' => $isOwner ? 'admin' : 'user',
             'account_status' => 'active',
             'email_verified_at' => now(), // Default instant verified for seamless referral onboarding
         ]);
 
-        // Initialize user referral verification record in NOT_STARTED state
+        // Initialize user referral verification record
         ReferralVerification::create([
             'user_id' => $user->id,
-            'status' => 'NOT_STARTED',
-            'verification_method' => 'manual_review',
+            'status' => $isOwner ? 'VERIFIED' : 'NOT_STARTED',
+            'verification_method' => $isOwner ? 'admin_granted' : 'manual_review',
         ]);
 
         // Audit Log
@@ -61,6 +64,10 @@ class RegisterController extends Controller
         ], $user->id);
 
         Auth::login($user);
+
+        if ($isOwner) {
+            return redirect()->route('admin.dashboard')->with('success', 'Welcome Administrator! Your account is active with full access.');
+        }
 
         return redirect()->route('referral-access')->with('success', 'Account created! Complete your Exness referral verification below to unlock the AI Chart Scanner.');
     }
