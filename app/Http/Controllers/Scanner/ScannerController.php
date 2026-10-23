@@ -61,7 +61,7 @@ class ScannerController extends Controller
         $strategy = $request->input('strategy');
         $inputType = $request->input('input_type');
 
-        $notes = $request->input('notes');
+        $notes = \App\Services\Security\PromptSanitizationService::sanitizeUserInput($request->input('notes'));
 
         $imagePath = null;
         $candles = null;
@@ -71,12 +71,14 @@ class ScannerController extends Controller
         $originalFilename = null;
 
         try {
-            // Handle Screenshot
+            // Handle Screenshot via Zero-Trust SecureUploadService
             if ($inputType === 'screenshot' && $request->hasFile('chart_image')) {
-                $file = $request->file('chart_image');
-                $originalFilename = $file->getClientOriginalName();
-                $storedPath = $file->store('scans/screenshots', 'local');
-                $imagePath = Storage::disk('local')->path($storedPath);
+                $processed = \App\Services\Security\SecureUploadService::processAndStoreScreenshot(
+                    $request->file('chart_image'),
+                    'scans/screenshots'
+                );
+                $originalFilename = $processed['original_name'];
+                $imagePath = $processed['absolute_path'];
             }
 
             // Handle CSV
@@ -139,7 +141,7 @@ class ScannerController extends Controller
                     'timeframe' => $timeframe,
                     'strategy' => $strategy,
                     'notes' => $notes,
-                ]);
+                ], $scan->id, $user->id);
 
                 // Update Scan record with auto-detected symbol and timeframe
                 $finalSymbol = !empty($plan['detected_symbol']) && $plan['detected_symbol'] !== 'AUTO'
@@ -225,6 +227,7 @@ class ScannerController extends Controller
 
             return redirect()->route('scans.show', $scan)->with('success', "AI analysis completed for {$scan->symbol} ({$scan->timeframe})!");
         } catch (Exception $e) {
+            \Illuminate\Support\Facades\Log::error('SCAN_FAILED_EXCEPTION: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
             AuditLog::log('scan_failed', 'Scan', null, [
                 'error' => $e->getMessage(),
                 'symbol' => $symbol,
@@ -269,7 +272,7 @@ class ScannerController extends Controller
             abort(403, 'Unauthorized access to private scan report.');
         }
 
-        $scan->load(['result', 'input']);
+        $scan->load(['result', 'input', 'analysisRun.agentResults', 'analysisRun.consensusResult', 'analysisRun.collaborationMessages']);
         $marketData = MarketData::where('scan_id', $scan->id)->orderBy('candle_timestamp')->get();
 
         return view('scans.show', compact('scan', 'marketData'));

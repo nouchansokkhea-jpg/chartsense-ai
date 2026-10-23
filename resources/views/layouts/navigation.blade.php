@@ -50,6 +50,10 @@
                             <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                         @endauth
                     </a>
+                    <a href="{{ route('news.index') }}" class="px-3 py-2 rounded-lg text-sm font-medium {{ request()->is('news*') ? 'text-cyan-400 bg-slate-800/50' : 'text-slate-300 hover:text-white hover:bg-slate-800/30' }} transition flex items-center space-x-1.5">
+                        <svg class="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11a9 9 0 0 1 9 9"></path><path d="M4 4a16 16 0 0 1 16 16"></path><circle cx="5" cy="19" r="1"></circle></svg>
+                        <span>Global News</span>
+                    </a>
                 </div>
             </div>
 
@@ -169,6 +173,7 @@
         <a href="{{ url('/#how-it-works') }}" class="block px-3 py-2 rounded-lg text-base font-medium text-slate-200 hover:bg-slate-800">How It Works</a>
         <a href="{{ url('/referral-access') }}" class="block px-3 py-2 rounded-lg text-base font-medium text-slate-200 hover:bg-slate-800">Exness Access</a>
         <a href="{{ url('/scanner') }}" class="block px-3 py-2 rounded-lg text-base font-medium text-cyan-400 hover:bg-slate-800">AI Scanner</a>
+        <a href="{{ route('news.index') }}" class="block px-3 py-2 rounded-lg text-base font-medium text-amber-300 hover:bg-slate-800">Global Market News</a>
         <a href="https://one.exnessonelink.com/a/l4l2nsdkfb?source=app" target="_blank" rel="noopener noreferrer" class="block px-3 py-2 rounded-lg text-base font-medium text-amber-300 hover:bg-slate-800">Join Exness Official</a>
 
         <div class="pt-4 border-t border-slate-800">

@@ -41,4 +41,10 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI', env('APP_URL', 'http://127.0.0.1:8000') . '/auth/google/callback'),
     ],
 
+    'telegram' => [
+        'bot_token' => env('TELEGRAM_BOT_TOKEN'),
+        'channel_id' => env('TELEGRAM_CHANNEL_ID'),
+        'bot_username' => env('TELEGRAM_BOT_USERNAME', 'ChartSenseAIScanner_bot'),
+    ],
+
 ];

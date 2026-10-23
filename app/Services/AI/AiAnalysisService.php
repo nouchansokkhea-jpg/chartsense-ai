@@ -15,18 +15,33 @@ class AiAnalysisService
     public function __construct(
         protected TechnicalAnalysisService $technicalAnalysis,
         protected TradingPlanValidator $validator,
-        protected LiveMarketNewsService $newsService
-    ) {}
+        protected LiveMarketNewsService $newsService,
+        protected ?MultiAiAnalysisService $multiAi = null
+    ) {
+        if ($this->multiAi === null) {
+            $this->multiAi = app(MultiAiAnalysisService::class);
+        }
+    }
 
     /**
-     * Analyze a chart either via screenshot image or numerical market data.
+     * Analyze a chart either via screenshot image or numerical market data using the coordinated Multi-AI engine.
      *
      * @param string|null $imagePath Absolute or storage path to uploaded screenshot
      * @param array|null $candles Array of parsed OHLCV candle records
      * @param array $metadata ['symbol' => 'XAUUSD', 'timeframe' => 'H1', 'strategy' => 'smc']
+     * @param int|null $scanId Associated Scan ID
+     * @param int|null $userId Requesting user ID
      * @return array Standardized structured trading plan
      */
-    public function analyze(?string $imagePath = null, ?array $candles = null, array $metadata = []): array
+    public function analyze(?string $imagePath = null, ?array $candles = null, array $metadata = [], ?int $scanId = null, ?int $userId = null): array
+    {
+        return $this->multiAi->analyze($imagePath, $candles, $metadata, $scanId, $userId);
+    }
+
+    /**
+     * Legacy single-model fallback analysis method.
+     */
+    public function legacyAnalyze(?string $imagePath = null, ?array $candles = null, array $metadata = []): array
     {
         $symbol = strtoupper($metadata['symbol'] ?? 'AUTO');
         $timeframe = strtoupper($metadata['timeframe'] ?? 'AUTO');
@@ -148,21 +163,25 @@ class AiAnalysisService
                 $python = '/usr/bin/python';
             }
 
-            $cmd = sprintf(
-                '%s %s %s %s %s %s %s 2>&1',
-                $python,
-                escapeshellarg($scriptPath),
-                escapeshellarg($imagePath),
-                escapeshellarg($symbol),
-                escapeshellarg($timeframe),
-                escapeshellarg($strategy),
-                escapeshellarg($notes ?? '')
-            );
+            $sanitizedNotes = \App\Services\Security\PromptSanitizationService::sanitizeUserInput($notes);
 
-            $output = shell_exec($cmd);
-            if (!$output) {
+            $process = new \Symfony\Component\Process\Process([
+                $python,
+                $scriptPath,
+                $imagePath,
+                $symbol,
+                $timeframe,
+                $strategy,
+                $sanitizedNotes,
+            ]);
+            $process->setTimeout(15);
+            $process->run();
+
+            if (!$process->isSuccessful()) {
                 return null;
             }
+
+            $output = $process->getOutput();
 
             if (preg_match('/\{[\s\S]*\}/', $output, $matches)) {
                 $decoded = json_decode($matches[0], true);

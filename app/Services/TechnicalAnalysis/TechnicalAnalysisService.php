@@ -36,22 +36,42 @@ class TechnicalAnalysisService
         // 4. Average True Range (ATR 14)
         $atr14 = $this->calculateAtr($candles, 14);
 
-        // 5. Swing Highs and Lows
+        // 5. Bollinger Bands (20, 2.0)
+        $bollinger = $this->calculateBollingerBands($closes, 20, 2.0);
+
+        // 6. Volume Analysis
+        $volumeMetrics = $this->calculateVolumeIndicators($candles, 20);
+
+        // 7. Swing Highs and Lows with Market Structure Detail
         $swings = $this->findSwingPivots($candles, 3);
 
-        // 6. Support & Resistance Levels
+        // 8. Support & Resistance Levels
         $levels = $this->calculateSupportResistance($swings, $latestClose);
 
-        // 7. Market Structure (BOS, CHOCH, Trend)
+        // 9. Market Structure (BOS, CHOCH, Trend, Structural Invalidation)
         $structure = $this->analyzeMarketStructure($candles, $swings);
 
-        // 8. Order Blocks & Fair Value Gaps (SMC)
+        // 10. Order Blocks & Fair Value Gaps (SMC)
         $smc = $this->analyzeSmcElements($candles, $swings);
 
-        // 9. Fibonacci Retracements
+        // 11. Fibonacci Retracements
         $fibonacci = $this->calculateFibonacci($swings, $latestClose);
 
-        // 10. Synthesize Strategy Signal
+        // 12. Deterministic Market Regime Classification
+        $regimeService = app(MarketRegimeService::class);
+        $marketRegime = $regimeService->classify($candles, [
+            'indicators' => [
+                'ema_9' => $ema9,
+                'ema_21' => $ema21,
+                'ema_50' => $ema50,
+                'sma_200' => $sma200,
+                'atr_14' => $atr14,
+                'bollinger' => $bollinger,
+            ],
+            'market_structure' => $structure,
+        ]);
+
+        // 13. Synthesize Strategy Signal
         $signal = $this->evaluateStrategySignal([
             'strategy' => $strategy,
             'latestClose' => $latestClose,
@@ -62,17 +82,33 @@ class TechnicalAnalysisService
             'ema21' => $ema21,
             'ema50' => $ema50,
             'atr' => $atr14,
+            'bollinger' => $bollinger,
+            'volume' => $volumeMetrics,
             'levels' => $levels,
             'smc' => $smc,
             'fibonacci' => $fibonacci,
+            'regime' => $marketRegime,
         ]);
 
         return [
             'latest_price' => $latestClose,
+            'parameters' => [
+                'sma_periods' => [20, 50, 200],
+                'ema_periods' => [9, 21, 50],
+                'rsi_period' => 14,
+                'macd' => ['fast' => 12, 'slow' => 26, 'signal' => 9],
+                'atr_period' => 14,
+                'bollinger' => ['period' => 20, 'std_dev' => 2.0],
+                'swing_window' => 3,
+                'volume_ma_period' => 20,
+                'fibonacci_levels' => [0.0, 23.6, 38.2, 50.0, 61.8, 78.6, 100.0],
+            ],
             'indicators' => [
                 'rsi_14' => $rsi14,
                 'macd' => $macd,
                 'atr_14' => $atr14,
+                'bollinger' => $bollinger,
+                'volume' => $volumeMetrics,
                 'sma_20' => $sma20,
                 'sma_50' => $sma50,
                 'sma_200' => $sma200,
@@ -81,6 +117,7 @@ class TechnicalAnalysisService
                 'ema_50' => $ema50,
             ],
             'market_structure' => $structure,
+            'market_regime' => $marketRegime,
             'support_resistance' => $levels,
             'smc' => $smc,
             'fibonacci' => $fibonacci,
@@ -190,6 +227,87 @@ class TechnicalAnalysisService
     }
 
     /**
+     * Bollinger Bands (period 20, 2 standard deviations).
+     */
+    public function calculateBollingerBands(array $closes, int $period = 20, float $stdDev = 2.0): ?array
+    {
+        $count = count($closes);
+        if ($count < $period) {
+            return null;
+        }
+
+        $slice = array_slice($closes, -$period);
+        $mean = array_sum($slice) / $period;
+
+        $variance = 0.0;
+        foreach ($slice as $val) {
+            $variance += pow($val - $mean, 2);
+        }
+        $sd = sqrt($variance / $period);
+
+        $upper = round($mean + ($stdDev * $sd), 5);
+        $lower = round($mean - ($stdDev * $sd), 5);
+        $middle = round($mean, 5);
+        $bandwidth = $middle > 0 ? round(($upper - $lower) / $middle, 5) : 0;
+        $latestClose = end($closes);
+        $percentB = ($upper - $lower) > 0 ? round(($latestClose - $lower) / ($upper - $lower), 4) : 0.5;
+
+        return [
+            'period' => $period,
+            'std_dev' => $stdDev,
+            'middle' => $middle,
+            'upper' => $upper,
+            'lower' => $lower,
+            'bandwidth' => $bandwidth,
+            'percent_b' => $percentB,
+        ];
+    }
+
+    /**
+     * Volume indicators (SMA 20, volume spike, bullish/bearish volume ratio).
+     */
+    public function calculateVolumeIndicators(array $candles, int $period = 20): array
+    {
+        $volumes = array_column($candles, 'volume');
+        $count = count($volumes);
+        if ($count === 0 || array_sum($volumes) == 0) {
+            return [
+                'has_volume_data' => false,
+                'volume_sma_20' => null,
+                'latest_volume' => null,
+                'volume_spike' => false,
+                'bullish_volume_ratio' => null,
+            ];
+        }
+
+        $slice = array_slice($volumes, -$period);
+        $avgVol = count($slice) > 0 ? array_sum($slice) / count($slice) : 0;
+        $latestVol = end($volumes);
+        $isSpike = $avgVol > 0 ? ($latestVol >= 1.8 * $avgVol) : false;
+
+        $recentCandles = array_slice($candles, -$period);
+        $bullishVol = 0.0;
+        $bearishVol = 0.0;
+        foreach ($recentCandles as $c) {
+            if ($c['close'] >= $c['open']) {
+                $bullishVol += (float)($c['volume'] ?? 0);
+            } else {
+                $bearishVol += (float)($c['volume'] ?? 0);
+            }
+        }
+        $totalRecent = $bullishVol + $bearishVol;
+        $bullishRatio = $totalRecent > 0 ? round($bullishVol / $totalRecent, 2) : 0.5;
+
+        return [
+            'has_volume_data' => true,
+            'volume_sma_20' => round($avgVol, 2),
+            'latest_volume' => round($latestVol, 2),
+            'volume_spike' => $isSpike,
+            'bullish_volume_ratio' => $bullishRatio,
+        ];
+    }
+
+    /**
      * Average True Range (ATR 14).
      */
     public function calculateAtr(array $candles, int $period = 14): ?float
@@ -235,10 +353,10 @@ class TechnicalAnalysisService
             }
 
             if ($isHigh) {
-                $highs[] = ['index' => $i, 'price' => $candles[$i]['high'], 'date' => $candles[$i]['date']];
+                $highs[] = ['index' => $i, 'price' => $candles[$i]['high'], 'date' => $candles[$i]['date'] ?? null];
             }
             if ($isLow) {
-                $lows[] = ['index' => $i, 'price' => $candles[$i]['low'], 'date' => $candles[$i]['date']];
+                $lows[] = ['index' => $i, 'price' => $candles[$i]['low'], 'date' => $candles[$i]['date'] ?? null];
             }
         }
 
@@ -266,7 +384,7 @@ class TechnicalAnalysisService
     }
 
     /**
-     * Analyze Market Structure (BOS, CHOCH, Higher Highs/Lows).
+     * Analyze Market Structure (BOS, CHOCH, Higher Highs/Lows, Invalidation).
      */
     public function analyzeMarketStructure(array $candles, array $swings): array
     {
@@ -276,6 +394,11 @@ class TechnicalAnalysisService
         $trend = 'Sideways';
         $bos = false;
         $choch = false;
+        $hh = false;
+        $hl = false;
+        $lh = false;
+        $ll = false;
+        $invalidationLevel = null;
 
         $hCount = count($highs);
         $lCount = count($lows);
@@ -287,15 +410,24 @@ class TechnicalAnalysisService
             $lastL = end($lows)['price'];
             $prevL = $lows[$lCount - 2]['price'];
 
-            if ($lastH > $prevH && $lastL > $prevL) {
+            $hh = $lastH > $prevH;
+            $lh = $lastH < $prevH;
+            $hl = $lastL > $prevL;
+            $ll = $lastL < $prevL;
+
+            if ($hh && $hl) {
                 $trend = 'Bullish';
                 $bos = true;
-            } elseif ($lastH < $prevH && $lastL < $prevL) {
+                $invalidationLevel = $lastL; // Breakdown below last swing low invalidates bullish structure
+            } elseif ($lh && $ll) {
                 $trend = 'Bearish';
                 $bos = true;
-            } elseif ($lastH > $prevH && $lastL < $prevL) {
+                $invalidationLevel = $lastH; // Breakout above last swing high invalidates bearish structure
+            } elseif ($hh && $ll) {
                 $choch = true;
-                $trend = 'Transitioning';
+                $trend = 'Expanding / Volatile';
+            } elseif ($lh && $hl) {
+                $trend = 'Consolidating / Range';
             }
         }
 
@@ -303,6 +435,11 @@ class TechnicalAnalysisService
             'trend' => $trend,
             'break_of_structure' => $bos,
             'change_of_character' => $choch,
+            'higher_high' => $hh,
+            'higher_low' => $hl,
+            'lower_high' => $lh,
+            'lower_low' => $ll,
+            'structural_invalidation_level' => $invalidationLevel,
             'swing_highs_count' => $hCount,
             'swing_lows_count' => $lCount,
         ];
@@ -327,7 +464,7 @@ class TechnicalAnalysisService
                     'type' => 'Bullish FVG',
                     'bottom' => $c1['high'],
                     'top' => $c3['low'],
-                    'date' => $c3['date'],
+                    'date' => $c3['date'] ?? $c3['timestamp'] ?? null,
                 ];
             }
             // Bearish FVG: High of candle 3 is lower than Low of candle 1
@@ -336,7 +473,7 @@ class TechnicalAnalysisService
                     'type' => 'Bearish FVG',
                     'top' => $c1['low'],
                     'bottom' => $c3['high'],
-                    'date' => $c3['date'],
+                    'date' => $c3['date'] ?? $c3['timestamp'] ?? null,
                 ];
             }
         }

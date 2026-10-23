@@ -83,6 +83,11 @@ class GoogleAuthController extends Controller
      */
     public function devMockLogin(Request $request): RedirectResponse
     {
+        // Zero-Trust Guard: Dev-mock login strictly restricted to local and testing environments
+        if (!app()->environment('local', 'testing')) {
+            abort(404, 'Mock authentication is disabled in production.');
+        }
+
         $validated = $request->validate([
             'email' => ['required', 'email'],
             'name' => ['nullable', 'string', 'max:100'],
@@ -197,6 +202,7 @@ class GoogleAuthController extends Controller
         $validated = $request->validate([
             'email' => ['required', 'email'],
             'uid' => ['required', 'string'],
+            'id_token' => ['nullable', 'string'],
             'name' => ['nullable', 'string', 'max:100'],
             'avatar' => ['nullable', 'string'],
         ]);
@@ -205,6 +211,34 @@ class GoogleAuthController extends Controller
         $name = !empty($validated['name']) ? trim($validated['name']) : explode('@', $email)[0];
         $uid = $validated['uid'];
         $avatar = $validated['avatar'] ?? null;
+        $idToken = $validated['id_token'] ?? null;
+
+        // Cryptographic verification of Firebase / Google ID token
+        $cryptographicallyVerified = false;
+        if (!empty($idToken)) {
+            try {
+                $tokenResp = \Illuminate\Support\Facades\Http::timeout(5)->get('https://oauth2.googleapis.com/tokeninfo', [
+                    'id_token' => $idToken,
+                ]);
+
+                if ($tokenResp->successful()) {
+                    $claims = $tokenResp->json();
+                    if (!empty($claims['email']) && strtolower(trim($claims['email'])) === $email) {
+                        $cryptographicallyVerified = true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Firebase token verification error: ' . $e->getMessage());
+            }
+        }
+
+        // In production, token verification is strictly mandatory
+        if (app()->environment('production') && !$cryptographicallyVerified) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Cryptographic token verification failed. A valid Google ID token is required.',
+            ], 401);
+        }
 
         $user = User::where('google_id', $uid)->orWhere('email', $email)->first();
 
@@ -230,8 +264,9 @@ class GoogleAuthController extends Controller
                 ], 403);
             }
 
+            // Zero-Trust Guard: Only cryptographically verified owner sessions can be promoted to admin
             $isOwner = in_array($email, ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true);
-            if ($isOwner && $user->role !== 'admin') {
+            if ($isOwner && $cryptographicallyVerified && $user->role !== 'admin') {
                 $user->update(['role' => 'admin']);
                 ReferralVerification::updateOrCreate(
                     ['user_id' => $user->id],
@@ -245,6 +280,7 @@ class GoogleAuthController extends Controller
             AuditLog::log('user_logged_in_firebase_google', 'User', (string)$user->id, [
                 'email' => $user->email,
                 'uid' => $uid,
+                'verified' => $cryptographicallyVerified,
                 'ip' => $request->ip(),
             ]);
 
@@ -260,7 +296,7 @@ class GoogleAuthController extends Controller
         }
 
         // New registration via Firebase Google
-        $isOwner = in_array($email, ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true);
+        $isOwner = in_array($email, ['nouchansokhea0@gmail.com', 'admin@chartsense.ai'], true) && $cryptographicallyVerified;
         $user = User::create([
             'name' => $name,
             'email' => $email,

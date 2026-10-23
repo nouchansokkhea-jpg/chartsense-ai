@@ -33,7 +33,7 @@ class LiveMarketNewsService
                 'high_impact_warning' => $sentimentData['high_impact_alert'],
                 'headlines' => array_slice($filtered, 0, 5),
                 'fetched_at' => now()->toIso8601String(),
-                'source' => $assetClass === 'crypto' ? 'CoinDesk Live Feed' : 'ForexLive Global Market Feed',
+                'source' => $assetClass === 'crypto' ? 'CoinDesk Live Feed' : 'ForexLive & Forex Factory Multi-Wire',
             ];
         });
     }
@@ -65,8 +65,8 @@ class LiveMarketNewsService
             : 'https://www.forexlive.com/feed/news';
 
         try {
-            $response = Http::withoutVerifying()
-                ->timeout(6)
+            \App\Services\Security\SsrfProtectionService::validateUrl($url);
+            $response = Http::timeout(6)
                 ->withHeaders([
                     'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 ])

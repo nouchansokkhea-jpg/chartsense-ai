@@ -53,4 +53,9 @@ class Scan extends Model
     {
         return $this->hasMany(MarketData::class);
     }
+
+    public function analysisRun(): HasOne
+    {
+        return $this->hasOne(AnalysisRun::class)->latestOfMany();
+    }
 }

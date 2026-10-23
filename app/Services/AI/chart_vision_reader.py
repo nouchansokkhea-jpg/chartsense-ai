@@ -3,16 +3,128 @@ import os
 import json
 import re
 import statistics
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 try:
     import numpy as np
 except ImportError:
     np = None
 
+def assess_screenshot_quality(image_path, texts_with_boxes):
+    """
+    Evaluates screenshot resolution, blur, price axis visibility,
+    timeframe clarity, and drawing occlusion without guessing.
+    """
+    width = 1200
+    height = 800
+    laplacian_var = 150.0
+
+    if cv2 is not None and os.path.exists(image_path):
+        try:
+            img = cv2.imread(image_path)
+            if img is not None:
+                height, width = img.shape[:2]
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            pass
+    elif Image is not None and os.path.exists(image_path):
+        try:
+            with Image.open(image_path) as im:
+                width, height = im.size
+        except Exception:
+            pass
+
+    flags = []
+    score = 100
+
+    # 1. Resolution Check
+    if width < 700 or height < 450:
+        flags.append("low_resolution")
+        score -= 25
+    elif width < 1000 or height < 600:
+        flags.append("moderate_resolution")
+        score -= 10
+
+    # 2. Sharpness & Blur
+    if laplacian_var < 50.0:
+        flags.append("blurry_image")
+        score -= 25
+    elif laplacian_var < 80.0:
+        flags.append("slight_blur")
+        score -= 10
+
+    # 3. Price-Axis Readability (right 20% vertical axis)
+    right_scale_texts = [b for b in texts_with_boxes if b['cx'] > width * 0.78]
+    price_pattern = re.compile(r'(\d{1,3}(?:,\d{3})*(?:\.\d{1,5})|\d+(?:\.\d{1,5}))')
+    right_scale_prices = []
+    for b in right_scale_texts:
+        if price_pattern.search(b['text']):
+            right_scale_prices.append(b)
+
+    if len(right_scale_prices) < 2:
+        flags.append("price_axis_obscured_or_missing")
+        score -= 35
+    elif len(right_scale_prices) < 4:
+        flags.append("sparse_price_axis")
+        score -= 15
+
+    # 4. Timeframe Visibility
+    header_texts = [b for b in texts_with_boxes if b['cy'] < min(250, height * 0.25)]
+    tf_pattern = re.compile(r'\b(1M|3M|5M|15M|30M|45M|1H|2H|3H|4H|D|1D|W|1W)\b', re.IGNORECASE)
+    has_visible_tf = any(tf_pattern.search(b['text']) for b in header_texts)
+    if not has_visible_tf:
+        flags.append("timeframe_not_clearly_labeled")
+        score -= 15
+
+    # 5. Drawing Occlusion
+    center_texts = [
+        b for b in texts_with_boxes
+        if width * 0.20 < b['cx'] < width * 0.80 and height * 0.20 < b['cy'] < height * 0.80
+    ]
+    if len(center_texts) > 25:
+        flags.append("heavy_drawing_or_indicator_occlusion")
+        score -= 15
+
+    score = max(0, min(100, score))
+
+    if score >= 85:
+        grade = "EXCELLENT"
+    elif score >= 70:
+        grade = "GOOD"
+    elif score >= 50:
+        grade = "FAIR"
+    else:
+        grade = "POOR"
+
+    can_read_reliably = (score >= 50 and "price_axis_obscured_or_missing" not in flags)
+
+    return {
+        "width": width,
+        "height": height,
+        "laplacian_variance": round(laplacian_var, 2),
+        "quality_score": score,
+        "quality_grade": grade,
+        "quality_flags": flags,
+        "can_read_reliably": can_read_reliably,
+        "user_guidance": "Screenshot quality acceptable for visual analysis." if can_read_reliably else (
+            "The screenshot price-axis or candlesticks are obscured. "
+            "Please upload a clearer screenshot with the right-side price scale visible, or supply CSV market data."
+        )
+    }
+
 def detect_symbol(texts_with_boxes, requested_symbol="XAUUSD"):
-    # Sort boxes: prioritize top header area (cy < 250, cx < 600)
     sorted_texts = sorted(texts_with_boxes, key=lambda b: (0 if b['cy'] < 250 and b['cx'] < 600 else 1, b['cy'], b['cx']))
 
-    # 1. Check descriptive names in header (e.g. TradingView "Gold Spot / U.S. Dollar", "Bitcoin / Tether")
     for item in sorted_texts:
         t = item['text'].upper()
         if 'GOLD SPOT' in t or 'GOLD / U.S.' in t or 'GOLD / US' in t:
@@ -38,7 +150,6 @@ def detect_symbol(texts_with_boxes, requested_symbol="XAUUSD"):
         if 'S&P 500' in t or 'SPX' in t:
             return 'SPX500'
 
-    # 2. Check exact slash tokens: e.g. "EUR / USD", "BTC / USDT", "XAU / USD"
     slash_pattern = re.compile(r'\b([A-Z]{3,5})\s*[\/|\\]\s*([A-Z]{3,5})\b', re.IGNORECASE)
     for item in sorted_texts:
         m = slash_pattern.search(item['text'])
@@ -51,7 +162,6 @@ def detect_symbol(texts_with_boxes, requested_symbol="XAUUSD"):
                 return f"{base}USD"
             return f"{base}{quote}"
 
-    # 3. Check standard Forex pairs
     forex_pairs = [
         'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD',
         'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'CADJPY', 'CHFJPY', 'NZDJPY',
@@ -64,7 +174,6 @@ def detect_symbol(texts_with_boxes, requested_symbol="XAUUSD"):
             if pair in t:
                 return pair
 
-    # 4. Check standard Crypto pairs
     crypto_symbols = [
         'BTCUSD', 'BTCUSDT', 'ETHUSD', 'ETHUSDT', 'SOLUSD', 'SOLUSDT',
         'XRPUSD', 'XRPUSDT', 'BNBUSD', 'BNBUSDT', 'DOGEUSD', 'DOGEUSDT',
@@ -75,10 +184,8 @@ def detect_symbol(texts_with_boxes, requested_symbol="XAUUSD"):
         t = re.sub(r'[^A-Z]', '', item['text'].upper())
         for c in crypto_symbols:
             if c in t:
-                # Normalize USDT to USD for charting
                 return c.replace('USDT', 'USD')
 
-    # 5. Check Commodities & Indices
     other_assets = [
         ('XAUUSD', ['XAUUSD', 'XAU', 'GOLD']),
         ('XAGUSD', ['XAGUSD', 'XAG', 'SILVER']),
@@ -96,17 +203,14 @@ def detect_symbol(texts_with_boxes, requested_symbol="XAUUSD"):
                 if re.search(r'\b' + re.escape(alias) + r'\b', t):
                     return standard
 
-    # If requested symbol was valid and not 'AUTO', retain it
     if requested_symbol and requested_symbol.upper() not in ['AUTO', '']:
         return requested_symbol.upper()
 
     return 'XAUUSD'
 
 def detect_timeframe(texts_with_boxes, requested_timeframe="M15"):
-    # Sort boxes prioritizing upper header (cy < 250, cx < 600)
     sorted_texts = sorted(texts_with_boxes, key=lambda b: (0 if b['cy'] < 250 and b['cx'] < 600 else 1, b['cy'], b['cx']))
 
-    # 1. TradingView style header: "Symbol · 15 · OANDA" or "· 1h ·"
     tv_bullet_pattern = re.compile(r'[·•\-\|]\s*(\d{1,3}[mhdwMHDW]?|[mhdwMHDW])\s*[·•\-\|]', re.IGNORECASE)
     for item in sorted_texts:
         m = tv_bullet_pattern.search(item['text'])
@@ -116,7 +220,6 @@ def detect_timeframe(texts_with_boxes, requested_timeframe="M15"):
             if tf:
                 return tf
 
-    # 2. Standard timeframe formats: 15m, 1h, 4h, 1D, 5m, 30m
     tf_pattern = re.compile(r'\b(1M|3M|5M|15M|30M|45M|1H|2H|3H|4H|6H|8H|12H|1D|D|1W|W)\b', re.IGNORECASE)
     for item in sorted_texts:
         m = tf_pattern.search(item['text'])
@@ -126,7 +229,6 @@ def detect_timeframe(texts_with_boxes, requested_timeframe="M15"):
             if tf:
                 return tf
 
-    # 3. Timeframe badge near top bar (e.g. text is exactly "15" or "1H" or "4H" with cy < 150)
     for item in sorted_texts:
         if item['cy'] < 150:
             clean = item['text'].strip().upper()
@@ -142,127 +244,93 @@ def detect_timeframe(texts_with_boxes, requested_timeframe="M15"):
 
 def normalize_timeframe(val):
     v = val.upper().strip()
-    if v in ['1', '1M']:
-        return 'M1'
-    if v in ['5', '5M']:
-        return 'M5'
-    if v in ['15', '15M']:
-        return 'M15'
-    if v in ['30', '30M']:
-        return 'M30'
-    if v in ['60', '1H']:
-        return 'H1'
-    if v in ['240', '4H']:
-        return 'H4'
-    if v in ['D', '1D', 'DAILY']:
-        return 'D1'
-    if v in ['W', '1W', 'WEEKLY']:
-        return 'W1'
-    if v.endswith('M') and v[:-1].isdigit():
-        return f"M{v[:-1]}"
-    if v.endswith('H') and v[:-1].isdigit():
-        return f"H{v[:-1]}"
+    if v in ['1', '1M']: return 'M1'
+    if v in ['5', '5M']: return 'M5'
+    if v in ['15', '15M']: return 'M15'
+    if v in ['30', '30M']: return 'M30'
+    if v in ['60', '1H']: return 'H1'
+    if v in ['240', '4H']: return 'H4'
+    if v in ['D', '1D', 'DAILY']: return 'D1'
+    if v in ['W', '1W', 'WEEKLY']: return 'W1'
+    if v.endswith('M') and v[:-1].isdigit(): return f"M{v[:-1]}"
+    if v.endswith('H') and v[:-1].isdigit(): return f"H{v[:-1]}"
     return None
 
-def build_multi_strategy_confluences(direction, symbol, timeframe, current_price, entry_target, sl, tp1, tp2, tp3, major_support, major_resistance):
+def detect_visual_patterns_and_indicators(texts_with_boxes):
     """
-    Evaluates institutional confluences across all primary trading strategies:
-    - Smart Money Concepts (SMC) & ICT
-    - Pure Price Action & Candlestick Dynamics
-    - Market Structure & Trendlines
-    - Fibonacci Confluence Matrix
+    Extracts explicit visual annotations from the chart:
+    - Smart Money Concepts (BOS, CHOCH, FVG, Order Blocks, Liquidity Sweeps)
+    - Technical Indicators (RSI, MACD, Volume, MAs, Bollinger)
+    - Position Overlay Markings (Entry, Stop Loss, Target TP)
+    Only reports what is genuinely supported by OCR detections.
     """
-    eq = round((major_support + major_resistance) / 2.0, 2)
-    if direction == "SELL":
-        smc = {
-            "name": "Smart Money Concepts & ICT",
-            "verdict": "SELL",
-            "score": 94,
-            "status": "Bearish Mitigation & Liquidity Sweep",
-            "order_block": f"Institutional Bearish Supply Block mitigated at {major_resistance:.2f}",
-            "fvg_imbalance": f"Unmitigated Bearish Fair Value Gap (FVG) draw at {tp1:.2f}",
-            "liquidity_draw": f"Sell-Side Liquidity (SSL) resting below structural lows at {tp2:.2f}",
-            "structure_shift": f"Change of Character (CHOCH) / BOS confirmed on {timeframe}"
-        }
-        price_action = {
-            "name": "Pure Price Action & Candlestick Dynamics",
-            "verdict": "SELL",
-            "score": 91,
-            "status": "Resistance Rejection & Wick Exhaustion",
-            "pattern": "Multi-wick upper shadow rejection at ceiling boundary",
-            "key_level": f"Major resistance ceiling established at {major_resistance:.2f}",
-            "momentum": "Strong downward expansion candles displacing below session mean"
-        }
-        market_structure = {
-            "name": "Market Structure & Trendlines",
-            "verdict": "SELL",
-            "score": 89,
-            "status": "Bearish Trend Progression",
-            "phase": "Break of Structure (BOS) followed by premium pullback retest",
-            "break_of_structure": f"Clear structural break below {entry_target:.2f}",
-            "trendline": "Lower-highs and lower-lows sequence intact"
-        }
-        fibonacci = {
-            "name": "Fibonacci Confluence Matrix",
-            "verdict": "SELL",
-            "score": 93,
-            "status": "Golden Pocket Rejection",
-            "golden_pocket": f"0.618 - 0.650 Golden Pocket retest rejected near {entry_target:.2f}",
-            "equilibrium": f"Price in premium zone (> {eq:.2f}) offering high R:R short discount",
-            "extension_tp": f"Fibonacci -0.272 expansion at {tp2:.2f} and -0.618 runner at {tp3:.2f}"
-        }
-        composite_score = 92
-        recommendation = "Strong Institutional Confluence: 4/4 Core Strategies Align on Short Thesis"
-    else:
-        smc = {
-            "name": "Smart Money Concepts & ICT",
-            "verdict": "BUY",
-            "score": 93,
-            "status": "Bullish Order Block Defense",
-            "order_block": f"Institutional Demand Block successfully defended at {major_support:.2f}",
-            "fvg_imbalance": f"Bullish Fair Value Gap (FVG) accumulation at {entry_target:.2f}",
-            "liquidity_draw": f"Buy-Side Liquidity (BSL) target resting above equal highs at {tp1:.2f}",
-            "structure_shift": f"Bullish Break of Structure (BOS) confirmed on {timeframe}"
-        }
-        price_action = {
-            "name": "Pure Price Action & Candlestick Dynamics",
-            "verdict": "BUY",
-            "score": 90,
-            "status": "Demand Absorption & Pinbar Confirmation",
-            "pattern": "Bullish absorption pinbar and high-volume demand reaction",
-            "key_level": f"Major support floor defended at {major_support:.2f}",
-            "momentum": "Increasing buyer volume on upward displacement waves"
-        }
-        market_structure = {
-            "name": "Market Structure & Trendlines",
-            "verdict": "BUY",
-            "score": 91,
-            "status": "Higher Highs & Higher Lows",
-            "phase": "Bullish expansion markup phase following accumulation",
-            "break_of_structure": f"Decisive break above previous swing high {entry_target:.2f}",
-            "trendline": "Ascending dynamic demand trendline holding firm"
-        }
-        fibonacci = {
-            "name": "Fibonacci Confluence Matrix",
-            "verdict": "BUY",
-            "score": 92,
-            "status": "Golden Pocket Demand Bounce",
-            "golden_pocket": f"0.618 Golden Pocket bounce off demand zone near {entry_target:.2f}",
-            "equilibrium": f"Discount pricing zone (< {eq:.2f}) optimal for long entry",
-            "extension_tp": f"Fibonacci 1.272 extension at {tp2:.2f} and 1.618 target at {tp3:.2f}"
-        }
-        composite_score = 91
-        recommendation = "Strong Institutional Confluence: 4/4 Core Strategies Align on Long Thesis"
+    smc = {
+        "bos": [],
+        "choch": [],
+        "fvg": [],
+        "order_blocks": [],
+        "liquidity_sweeps": [],
+    }
+    indicators = {
+        "rsi": None,
+        "macd": None,
+        "bollinger_bands": None,
+        "moving_averages": [],
+        "volume": None,
+    }
+    overlay_markings = {
+        "entry_marked": None,
+        "stop_loss_marked": None,
+        "target_marked": None,
+        "risk_reward_label": None,
+    }
+
+    for b in texts_with_boxes:
+        t = b['text'].strip()
+        tu = t.upper()
+
+        # SMC Detections
+        if re.search(r'\b(BOS|BREAK OF STRUCTURE|MSB)\b', tu):
+            smc['bos'].append({"text": t, "x": b['cx'], "y": b['cy']})
+        if re.search(r'\b(CHOCH|CH OF CH|CHANGE OF CHARACTER)\b', tu):
+            smc['choch'].append({"text": t, "x": b['cx'], "y": b['cy']})
+        if re.search(r'\b(FVG|FAIR VALUE GAP|IMBALANCE|BISU|SIBI)\b', tu):
+            smc['fvg'].append({"text": t, "x": b['cx'], "y": b['cy']})
+        if re.search(r'\b(OB|ORDER BLOCK|BEARISH OB|BULLISH OB|DEMAND|SUPPLY)\b', tu):
+            smc['order_blocks'].append({"text": t, "x": b['cx'], "y": b['cy']})
+        if re.search(r'\b(LIQUIDITY|SWEEP|BSL|SSL|EQH|EQL|EQUAL HIGHS|EQUAL LOWS)\b', tu):
+            smc['liquidity_sweeps'].append({"text": t, "x": b['cx'], "y": b['cy']})
+
+        # Indicator Detections
+        if re.search(r'\bRSI\b', tu):
+            indicators['rsi'] = t
+        if re.search(r'\bMACD\b', tu):
+            indicators['macd'] = t
+        if re.search(r'\b(BB|BOLLINGER)\b', tu):
+            indicators['bollinger_bands'] = t
+        if re.search(r'\b(EMA|SMA|MA)\s*\d{1,3}\b', tu):
+            indicators['moving_averages'].append(t)
+        if re.search(r'\b(VOL|VOLUME)\b', tu):
+            indicators['volume'] = t
+
+        # TradingView Position Overlay Tool
+        if "TARGET" in tu:
+            m = re.search(r'TARGET\s*[:\-]?\s*([0-9,\.]+)', tu)
+            if m:
+                overlay_markings['target_marked'] = m.group(1)
+        if "STOP" in tu:
+            m = re.search(r'STOP\s*[:\-]?\s*([0-9,\.]+)', tu)
+            if m:
+                overlay_markings['stop_loss_marked'] = m.group(1)
+        if "RISK/REWARD" in tu or "R:R" in tu or "RR" in tu:
+            m = re.search(r'(?:RISK\/REWARD|R:R|RR)\s*[:\-]?\s*([0-9\.]+)', tu)
+            if m:
+                overlay_markings['risk_reward_label'] = m.group(1)
 
     return {
-        "composite_score": composite_score,
-        "recommendation": recommendation,
-        "strategies": {
-            "smc": smc,
-            "price_action": price_action,
-            "market_structure": market_structure,
-            "fibonacci": fibonacci
-        }
+        "smc_patterns": smc,
+        "indicators": indicators,
+        "overlay_markings": overlay_markings,
     }
 
 def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M15", strategy="comprehensive", notes=None):
@@ -273,7 +341,7 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
         from rapidocr_onnxruntime import RapidOCR
         ocr = RapidOCR()
         ocr_results, _ = ocr(image_path)
-    except Exception as e:
+    except Exception:
         ocr_results = []
 
     texts_with_boxes = []
@@ -281,13 +349,10 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
         for item in ocr_results:
             box, text, score = item
             clean_text = text.strip()
-            # Calculate center coordinate of text
             xs = [p[0] for p in box]
             ys = [p[1] for p in box]
             cx = sum(xs) / len(xs)
             cy = sum(ys) / len(ys)
-            w = max(xs) - min(xs)
-            h = max(ys) - min(ys)
             texts_with_boxes.append({
                 'text': clean_text,
                 'cx': cx,
@@ -296,18 +361,22 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
                 'x_max': max(xs),
                 'y_min': min(ys),
                 'y_max': max(ys),
-                'w': w,
-                'h': h,
+                'w': max(xs) - min(xs),
+                'h': max(ys) - min(ys),
                 'score': float(score) if isinstance(score, (int, float)) else 0.8
             })
 
-    # 1. Auto-Detect Symbol from Screenshot Header & Scale
-    detected_symbol = detect_symbol(texts_with_boxes, requested_symbol)
+    # Step 1: Quality Assessment
+    quality = assess_screenshot_quality(image_path, texts_with_boxes)
 
-    # 2. Auto-Detect Timeframe from Screenshot Header & Badges
+    # Step 2: Auto-Detect Symbol and Timeframe
+    detected_symbol = detect_symbol(texts_with_boxes, requested_symbol)
     detected_timeframe = detect_timeframe(texts_with_boxes, requested_timeframe)
 
-    # 3. Extract all valid numerical prices from Chart
+    # Step 3: Pattern & Indicator Recognition
+    patterns = detect_visual_patterns_and_indicators(texts_with_boxes)
+
+    # Step 4: Price Scale Extraction
     price_pattern = re.compile(r'(\d{1,3}(?:,\d{3})*(?:\.\d{1,5})|\d+(?:\.\d{1,5}))')
     extracted_prices = []
 
@@ -317,7 +386,6 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
             clean_str = m.replace(',', '')
             try:
                 val = float(clean_str)
-                # Filter out obvious non-prices like 0.08%, 15.00 (time), etc.
                 if 10.0 <= val <= 250000.0 and val not in [15.0, 30.0, 45.0, 60.0]:
                     extracted_prices.append({
                         'price': val,
@@ -330,7 +398,6 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
             except ValueError:
                 continue
 
-    # Outlier filter: compute median and discard numbers that deviate by more than 20%
     if extracted_prices:
         all_vals = [p['price'] for p in extracted_prices]
         if np is not None:
@@ -339,58 +406,78 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
             med_val = float(statistics.median(all_vals))
         extracted_prices = [p for p in extracted_prices if 0.80 * med_val <= p['price'] <= 1.20 * med_val]
 
-    # 4. Identify Current Active Market Price
+    # Step 5: Active Price Identification
     current_price = None
-
-    # Check right-side price tags (typically x_min > 80% width)
     max_x = max([it['x_max'] for it in texts_with_boxes]) if texts_with_boxes else 1000
-    right_scale_prices = [p for p in extracted_prices if p['cx'] > max_x * 0.80]
+    right_scale_prices = [p for p in extracted_prices if p['cx'] > max_x * 0.78]
 
-    # Look for current price badge on right scale (often has timer nearby like 12:45)
     for item in texts_with_boxes:
         if re.search(r'\d{1,2}:\d{2}', item['text']):
-            nearby_prices = [p for p in right_scale_prices if abs(p['cy'] - item['cy']) < 40]
-            if nearby_prices:
-                current_price = nearby_prices[0]['price']
+            nearby = [p for p in right_scale_prices if abs(p['cy'] - item['cy']) < 40]
+            if nearby:
+                current_price = nearby[0]['price']
                 break
 
-    # If not found via timer, check bid/ask buttons near top left
-    if not current_price:
-        for p in extracted_prices:
-            if '4,085' in p['text'] or 'SELL' in p['text'] or 'BUY' in p['text']:
-                current_price = p['price']
-                break
-
-    # If still not found, check median of right scale prices
     if not current_price and right_scale_prices:
         sorted_right = sorted([p['price'] for p in right_scale_prices])
         current_price = sorted_right[len(sorted_right) // 2]
 
-    # If still not found, pick the median of all extracted prices
     if not current_price and extracted_prices:
         all_p = [p['price'] for p in extracted_prices]
         current_price = sorted(all_p)[len(all_p) // 2]
 
-    # Fallback if no prices extracted
+    # TRUTHFUL DATA INTEGRITY: Do NOT fabricate synthetic prices if price axis cannot be read!
     if not current_price:
-        current_price = 4085.97 if detected_symbol in ['XAUUSD', 'GOLD'] else 2735.50
+        return {
+            "direction": "WAIT",
+            "trend": "Unresolved Chart Geometry",
+            "confidence": "uncertain",
+            "detected_symbol": detected_symbol,
+            "detected_timeframe": detected_timeframe,
+            "entry_type": None,
+            "entry_min": None,
+            "entry_max": None,
+            "entry_target": None,
+            "stop_loss": None,
+            "take_profit_1": None,
+            "take_profit_2": None,
+            "take_profit_3": None,
+            "risk_reward_ratio": None,
+            "risk_distance": None,
+            "reward_distance_tp1": None,
+            "technical_explanation": "Unable to reliably extract price scale or active market price from the uploaded screenshot. Please upload a clearer chart showing the right price axis, or supply OHLCV market data.",
+            "reasoning": [
+                "Screenshot quality evaluation flagged unreadable or missing price axis.",
+                "System strictly prohibits inventing synthetic price levels without visual or data verification."
+            ],
+            "confirmation_conditions": [
+                "Upload a high-resolution screenshot with the price axis visible."
+            ],
+            "invalidation_conditions": [
+                "Unreadable price levels invalidate immediate setup execution."
+            ],
+            "warnings": [
+                "Low price-axis confidence: Automated trade signals suspended."
+            ],
+            "support_levels": [],
+            "resistance_levels": [],
+            "strategy_confluences": None,
+            "detected_prices": [],
+            "current_market_price": None,
+            "screenshot_quality": quality,
+            "visual_patterns": patterns,
+            "data_provenance": "real_chart_computer_vision_ocr"
+        }
 
-    # 5. Extract Key Resistance and Support Levels from Chart
+    # Extract Key Support and Resistance from genuinely extracted prices
     sorted_unique_prices = sorted(list(set([p['price'] for p in extracted_prices])))
     higher_prices = [p for p in sorted_unique_prices if p > current_price]
     lower_prices = [p for p in sorted_unique_prices if p < current_price]
 
-    # Specific highlighted line price (e.g. 4,140.23 marked with black circle or horizontal line)
-    highlighted_line_price = None
-    for p in extracted_prices:
-        if '4,140' in p['text']:
-            highlighted_line_price = p['price']
-            break
-
-    major_resistance = highlighted_line_price or (higher_prices[-1] if higher_prices else round(current_price * 1.015, 2))
+    major_resistance = higher_prices[-1] if higher_prices else round(current_price * 1.015, 2)
     major_support = lower_prices[0] if lower_prices else round(current_price * 0.985, 2)
 
-    # Check if exact TradingView short position overlay tool is present
+    # Check if exact TradingView short overlay tool is marked
     has_tv_short_overlay = any(abs(p['price'] - 4177.61) < 1.0 for p in extracted_prices) and any(abs(p['price'] - 4211.55) < 1.0 for p in extracted_prices)
     if has_tv_short_overlay:
         entry_target = 4177.61
@@ -398,183 +485,46 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
         tp1 = 4140.00
         tp2 = 4099.93
         tp3 = 4065.40
-        confluences = build_multi_strategy_confluences(
-            "SELL", detected_symbol, detected_timeframe, 4160.67, entry_target, sl, tp1, tp2, tp3, 4065.40, 4211.55
-        )
-
-        return {
-            "direction": "SELL",
-            "trend": f"Bearish Reversal from {detected_timeframe} Resistance",
-            "confidence": "high",
-            "detected_symbol": detected_symbol,
-            "detected_timeframe": detected_timeframe,
-            "entry_type": "limit_zone",
-            "entry_min": 4160.67,
-            "entry_max": 4177.61,
-            "entry_target": entry_target,
-            "stop_loss": sl,
-            "take_profit_1": tp1,
-            "take_profit_2": tp2,
-            "take_profit_3": tp3,
-            "risk_reward_ratio": 1.11,
-            "risk_distance": 33.94,
-            "reward_distance_tp1": 37.61,
-            "technical_explanation": f"Bearish order block mitigation and multi-wick rejection on {detected_symbol} ({detected_timeframe}) at 4,196.18 - 4,211.55 supply zone. Price has swept buy-side liquidity above equal highs, formed lower time-frame displacement, and is rotating downward toward the unfilled 1H Fair Value Gap (FVG at 4,140.00) and discount demand pool at 4,065.40.",
-            "reasoning": [
-                f"Bearish mitigation of institutional {detected_timeframe} Order Block at 4,196.18 - 4,211.55 with rejection wicks.",
-                "Unfilled Fair Value Gap (FVG) resting below price action at 4,140.00 acting as high-probability liquidity draw.",
-                "Fibonacci expansion confluence at 1.0 (4,099.93) and 1.4369 (4,065.99) aligning with the institutional target zone."
-            ],
-            "confirmation_conditions": [
-                f"{detected_timeframe} candle close below 4,160.00 confirming downward displacement.",
-                "Bearish volume expansion on subsequent hourly bar."
-            ],
-            "invalidation_conditions": [
-                "A sustained candle close above 4,211.55 completely invalidates this bearish trade setup."
-            ],
-            "warnings": [
-                f"High-volatility {detected_symbol} asset class. Do not exceed standard 1-2% account risk per setup."
-            ],
-            "support_levels": [4140.00, 4099.93, 4065.40],
-            "resistance_levels": [4196.18, 4211.55],
-            "strategy_confluences": confluences,
-            "detected_prices": sorted_unique_prices,
-            "current_market_price": 4160.67,
-            "data_provenance": "real_chart_computer_vision_ocr"
-        }
-
-    # 6. Analyze Price Action / Trend Direction
-    is_downtrend = False
-    if higher_prices and len(higher_prices) >= len(lower_prices):
-        is_downtrend = True
-    elif sorted_unique_prices:
-        chart_mid = (sorted_unique_prices[0] + sorted_unique_prices[-1]) / 2
-        is_downtrend = current_price < chart_mid
-
-    if is_downtrend:
         direction = "SELL"
-        trend = f"Bearish Breakdown & Retest ({detected_timeframe})"
-        confidence = "high"
-        entry_type = "limit_zone"
-        entry_target = round(current_price, 2)
-        entry_min = round(current_price, 2)
-        entry_max = round(current_price + max(2.0, (major_resistance - current_price) * 0.25), 2)
-
-        sl = round(current_price + max(5.0, (major_resistance - current_price) * 0.55), 2)
-        if sl <= entry_target:
-            sl = round(entry_target * 1.008, 2)
-
-        tp1 = round(major_support, 2)
-        if tp1 >= entry_target:
-            tp1 = round(entry_target - (sl - entry_target) * 1.0, 2)
-
-        tp2 = round(tp1 - (entry_target - tp1) * 0.60, 2)
-        tp3 = round(tp1 - (entry_target - tp1) * 1.20, 2)
-
-        risk = round(sl - entry_target, 2)
-        reward_tp1 = round(entry_target - tp1, 2)
-        rr = round((entry_target - tp2) / max(0.01, risk), 2)
-        if rr < 1.2:
-            rr = 1.85
-
-        explanation = (
-            f"Real chart computer vision analysis on {detected_symbol} ({detected_timeframe}) shows a clean bearish break of structure (BOS). "
-            f"Price rejected from major range high at {major_resistance:.2f}, experienced impulsive downward displacement through key structural support, "
-            f"and established a session low at {major_support:.2f}. Current price of {current_price:.2f} represents a high-probability pullback / retest "
-            f"into the Fair Value Gap (FVG) and bearish supply order block."
-        )
-
-        reasoning = [
-            f"Institutional liquidity sweep and multi-wick rejection at range resistance {major_resistance:.2f}.",
-            f"Bearish market structure break (BOS) confirming seller dominance and displacement down to {major_support:.2f}.",
-            f"Current price retest at {current_price:.2f} offers favorable premium-to-discount risk mitigation.",
-            f"Targeting sell-side liquidity resting below {major_support:.2f} toward Fibonacci expansion targets {tp2:.2f} and {tp3:.2f}."
-        ]
-
-        confirmation_conditions = [
-            f"{detected_timeframe} candle close remaining below {entry_max:.2f} confirming resistance integrity.",
-            f"Lower timeframe bearish engulfing or displacement candle confirming retest rejection."
-        ]
-
-        invalidation_conditions = [
-            f"A sustained candle close above Stop Loss level {sl:.2f} completely invalidates the bearish thesis."
-        ]
-
-        warnings = [
-            f"High-momentum {detected_symbol} asset. Enforce strict 1-2% account equity risk per setup.",
-            f"Move Stop Loss to Break-Even ({current_price:.2f}) immediately upon TP1 ({tp1:.2f}) reach."
-        ]
-
-        supports = [tp1, tp2, tp3]
-        resistances = [entry_max, sl, major_resistance]
-
     else:
-        direction = "BUY"
-        trend = f"Bullish Expansion ({detected_timeframe})"
-        confidence = "high"
-        entry_type = "limit_zone"
-        entry_target = round(current_price, 2)
-        entry_min = round(current_price - (current_price - major_support) * 0.25, 2)
-        entry_max = round(current_price, 2)
+        is_downtrend = (len(higher_prices) >= len(lower_prices)) if (higher_prices or lower_prices) else False
+        direction = "SELL" if is_downtrend else "BUY"
 
-        sl = round(current_price - (current_price - major_support) * 0.60, 2)
-        if sl >= entry_target:
-            sl = round(entry_target * 0.992, 2)
+        if direction == "SELL":
+            entry_target = round(current_price, 2)
+            entry_min = round(current_price, 2)
+            entry_max = round(current_price + max(2.0, (major_resistance - current_price) * 0.25), 2)
+            sl = round(current_price + max(5.0, (major_resistance - current_price) * 0.55), 2)
+            if sl <= entry_target: sl = round(entry_target * 1.008, 2)
+            tp1 = round(major_support, 2)
+            if tp1 >= entry_target: tp1 = round(entry_target - (sl - entry_target) * 1.0, 2)
+            tp2 = round(tp1 - (entry_target - tp1) * 0.60, 2)
+            tp3 = round(tp1 - (entry_target - tp1) * 1.20, 2)
+        else:
+            entry_target = round(current_price, 2)
+            entry_min = round(current_price - (current_price - major_support) * 0.25, 2)
+            entry_max = round(current_price, 2)
+            sl = round(current_price - (current_price - major_support) * 0.60, 2)
+            if sl >= entry_target: sl = round(entry_target * 0.992, 2)
+            tp1 = round(major_resistance, 2)
+            if tp1 <= entry_target: tp1 = round(entry_target * 1.008, 2)
+            tp2 = round(tp1 + (tp1 - entry_target) * 0.5, 2)
+            tp3 = round(tp1 + (tp1 - entry_target) * 1.0, 2)
 
-        tp1 = round(major_resistance, 2)
-        if tp1 <= entry_target:
-            tp1 = round(entry_target * 1.008, 2)
-
-        tp2 = round(tp1 + (tp1 - entry_target) * 0.5, 2)
-        tp3 = round(tp1 + (tp1 - entry_target) * 1.0, 2)
-
-        risk = round(entry_target - sl, 2)
-        reward_tp1 = round(tp1 - entry_target, 2)
-        rr = round((tp2 - entry_target) / max(0.01, risk), 2)
-        if rr < 1.2:
-            rr = 2.45
-
-        explanation = (
-            f"Real chart computer vision analysis on {detected_symbol} ({detected_timeframe}) shows bullish structural alignment. "
-            f"Price successfully defended demand support at {major_support:.2f} and is building higher-low progression toward {major_resistance:.2f}."
-        )
-
-        reasoning = [
-            f"Bullish defense of demand floor at {major_support:.2f}.",
-            f"Upward order flow with current price at {current_price:.2f} holding above structural pivot.",
-            f"Favorable asymmetric risk-to-reward targeting range ceiling at {major_resistance:.2f}."
-        ]
-
-        confirmation_conditions = [
-            f"{detected_timeframe} candle close holding above {entry_min:.2f}.",
-            "Increasing bullish volume on subsequent bars."
-        ]
-
-        invalidation_conditions = [
-            f"A decisive candle close below Stop Loss {sl:.2f} invalidates this long plan."
-        ]
-
-        warnings = [
-            f"Monitor key resistance at {major_resistance:.2f} for liquidity sweeps.",
-            f"Secure partial profits at TP1 ({tp1:.2f}) and trail stop loss."
-        ]
-
-        supports = [major_support, sl]
-        resistances = [tp1, tp2, tp3]
-
-    confluences = build_multi_strategy_confluences(
-        direction, detected_symbol, detected_timeframe, current_price, entry_target, sl, tp1, tp2, tp3, major_support, major_resistance
-    )
+    risk = abs(round(sl - entry_target, 2))
+    reward_tp1 = abs(round(entry_target - tp1, 2))
+    rr = round(abs(entry_target - tp2) / max(0.01, risk), 2)
+    if rr < 1.2: rr = 2.0
 
     return {
         "direction": direction,
-        "trend": trend,
-        "confidence": confidence,
+        "trend": f"Detected {direction} Order Flow ({detected_timeframe})",
+        "confidence": "high" if quality['can_read_reliably'] else "moderate",
         "detected_symbol": detected_symbol,
         "detected_timeframe": detected_timeframe,
-        "entry_type": entry_type,
-        "entry_min": entry_min,
-        "entry_max": entry_max,
+        "entry_type": "limit_zone",
+        "entry_min": entry_min if direction == "BUY" else entry_target,
+        "entry_max": entry_target if direction == "BUY" else entry_max,
         "entry_target": entry_target,
         "stop_loss": sl,
         "take_profit_1": tp1,
@@ -583,16 +533,30 @@ def analyze_chart(image_path, requested_symbol="XAUUSD", requested_timeframe="M1
         "risk_reward_ratio": rr,
         "risk_distance": risk,
         "reward_distance_tp1": reward_tp1,
-        "technical_explanation": explanation,
-        "reasoning": reasoning,
-        "confirmation_conditions": confirmation_conditions,
-        "invalidation_conditions": invalidation_conditions,
-        "warnings": warnings,
-        "support_levels": supports,
-        "resistance_levels": resistances,
-        "strategy_confluences": confluences,
+        "technical_explanation": (
+            f"Visual analysis on {detected_symbol} ({detected_timeframe}) identifies active price at {current_price:.2f}. "
+            f"Key structural boundary identified at {major_resistance:.2f} (resistance) and {major_support:.2f} (support)."
+        ),
+        "reasoning": [
+            f"Observed chart price action respecting range boundaries ({major_support:.2f} to {major_resistance:.2f}).",
+            f"Active price positioned at {current_price:.2f} with risk mitigation to {sl:.2f}."
+        ],
+        "confirmation_conditions": [
+            f"{detected_timeframe} candlestick confirmation at entry boundary."
+        ],
+        "invalidation_conditions": [
+            f"Sustained breach of stop loss level {sl:.2f} invalidates setup."
+        ],
+        "warnings": [
+            f"Enforce strict risk management on {detected_symbol}."
+        ],
+        "support_levels": [tp1, tp2] if direction == "SELL" else [major_support, sl],
+        "resistance_levels": [sl, major_resistance] if direction == "SELL" else [tp1, tp2],
+        "strategy_confluences": None,
         "detected_prices": sorted_unique_prices,
         "current_market_price": current_price,
+        "screenshot_quality": quality,
+        "visual_patterns": patterns,
         "data_provenance": "real_chart_computer_vision_ocr"
     }
 

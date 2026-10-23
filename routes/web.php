@@ -74,6 +74,11 @@ Route::middleware(['auth', 'account.active'])->group(function () {
     // Dashboard
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
+    // Global Market News Intelligence Dashboard & Live Real-Time Stream
+    Route::get('/news', [\App\Http\Controllers\News\NewsIntelligenceController::class, 'index'])->name('news.index');
+    Route::get('/api/news/live', [\App\Http\Controllers\News\NewsIntelligenceController::class, 'liveStream'])->name('news.live');
+    Route::post('/api/news/sync', [\App\Http\Controllers\News\NewsIntelligenceController::class, 'syncNow'])->name('news.sync');
+
     // Profile Settings
     Route::get('/settings/profile', [ProfileController::class, 'index'])->name('profile.edit');
     Route::get('/profile', [ProfileController::class, 'index']);
@@ -127,11 +132,27 @@ Route::middleware(['auth', 'account.active'])->group(function () {
         // Scans Monitor
         Route::get('/scans', [AdminScanController::class, 'index'])->name('scans');
 
+        // Global Trading Strategy Studio & Research Lab
+        Route::get('/strategies', [\App\Http\Controllers\Admin\AdminStrategyController::class, 'index'])->name('strategies.index');
+        Route::get('/strategies/research', [\App\Http\Controllers\Admin\AdminStrategyController::class, 'researchLab'])->name('strategies.research');
+        Route::post('/strategies', [\App\Http\Controllers\Admin\AdminStrategyController::class, 'store'])->name('strategies.store');
+        Route::post('/strategies/{strategy}/toggle-active', [\App\Http\Controllers\Admin\AdminStrategyController::class, 'toggleActive'])->name('strategies.toggle-active');
+        Route::get('/strategies/{strategy}/evaluations', [\App\Http\Controllers\Admin\AdminStrategyController::class, 'evaluations'])->name('strategies.evaluations');
+
         // AI & System Settings
         Route::get('/settings', [AdminSettingController::class, 'index'])->name('settings');
         Route::post('/settings', [AdminSettingController::class, 'update'])->name('settings.update');
 
         // System Audit Logs
         Route::get('/audit-logs', [AdminSettingController::class, 'auditLogs'])->name('audit-logs');
+
+        // Zero-Trust Security Fortress Center
+        Route::get('/security', [\App\Http\Controllers\Admin\AdminSecurityController::class, 'index'])->name('security');
+        Route::post('/security/test-backup', [\App\Http\Controllers\Admin\AdminSecurityController::class, 'testBackup'])->name('security.test-backup');
+
+        // Global Market Learning Center
+        Route::get('/learning', [\App\Http\Controllers\Admin\AdminLearningController::class, 'index'])->name('learning.index');
+        Route::post('/learning/sync-historical', [\App\Http\Controllers\Admin\AdminLearningController::class, 'syncHistorical'])->name('learning.sync');
+        Route::post('/learning/run-cycle', [\App\Http\Controllers\Admin\AdminLearningController::class, 'runCycle'])->name('learning.run-cycle');
     });
 });

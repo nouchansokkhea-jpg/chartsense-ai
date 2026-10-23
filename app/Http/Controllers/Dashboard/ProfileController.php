@@ -56,14 +56,26 @@ class ProfileController extends Controller
 
         $validated = $request->validate([
             'current_password' => ['required', 'current_password'],
-            'password' => ['required', 'string', Password::min(8), 'confirmed'],
+            'password' => ['required', 'string', Password::min(8)->letters()->numbers(), 'confirmed'],
         ]);
 
         $user->password = Hash::make($validated['password']);
         $user->save();
 
-        AuditLog::log('password_changed', 'User', (string)$user->id, [], $user->id);
+        // Invalidate active sessions on other devices
+        try {
+            \Illuminate\Support\Facades\Auth::logoutOtherDevices($validated['password']);
+        } catch (\Throwable $e) {
+            // Non-blocking fallback if session driver does not support database sessions
+        }
 
-        return redirect()->route('profile.edit')->with('success', 'Password updated successfully.');
+        // Rotate current session ID to protect against session fixation
+        $request->session()->regenerate();
+
+        AuditLog::log('password_changed', 'User', (string)$user->id, [
+            'ip' => $request->ip(),
+        ], $user->id);
+
+        return redirect()->route('profile.edit')->with('success', 'Password updated successfully. Other active sessions have been invalidated.');
     }
 }
